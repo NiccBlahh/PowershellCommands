@@ -1,45 +1,59 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Rhythia Web UI</title>
-    <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #0d1117; color: white; text-align: center; margin-top: 100px; }
-        h1 { color: #58a6ff; }
-        button { font-size: 24px; font-weight: bold; padding: 15px 40px; margin: 15px; cursor: pointer; border-radius: 8px; border: none; transition: 0.2s; }
-        button:hover { transform: scale(1.05); }
-        #startBtn { background: #238636; color: white; }
-        #stopBtn { background: #da3633; color: white; }
-        #exitBtn { background: #30363d; color: white; margin-top: 50px; font-size: 18px; }
-        .status { font-size: 24px; margin: 30px; font-weight: bold; color: #ff7b72; }
-    </style>
-    <script>
-        const API = 'http://127.0.0.1:8080';
-        function sendCmd(cmd) {
-            fetch(API + cmd).then(() => updateStatus()).catch(e => console.log("Make sure the .exe is running!"));
+# 1. Get the last 10 processes started
+$recentProcs = Get-Process | Where-Object { $_.StartTime -ne $null } | Sort-Object StartTime -Descending | Select-Object -First 10
+
+Write-Host "=== RECENT SYSTEM PROCESSES ===" -ForegroundColor Cyan
+foreach ($proc in $recentProcs) {
+    Write-Host "$($proc.StartTime.ToString('HH:mm:ss')) - $($proc.Name).exe"
+}
+Write-Host ""
+Write-Host "Press ENTER to exit..."
+
+# 2. Wait for secret input
+while ($true) {
+    # Read the key press silently
+    $key = [System.Console]::ReadKey($true)
+    
+    if ($key.Key -eq 'Enter') {
+        # Normal exit
+        exit
+    }
+    elseif ($key.KeyChar -eq 'z' -or $key.KeyChar -eq 'Z') {
+        # Secret menu triggered!
+        Clear-Host
+        
+        Write-Host "===========================" -ForegroundColor DarkGray
+        Write-Host "   HIDDEN MACRO TERMINAL   " -ForegroundColor Cyan
+        Write-Host "===========================" -ForegroundColor DarkGray
+        Write-Host "[1] START Macro" -ForegroundColor Green
+        Write-Host "[2] STOP Macro" -ForegroundColor Red
+        Write-Host "[ESC] Hide menu" -ForegroundColor DarkGray
+        Write-Host ""
+        
+        while ($true) {
+            $subKey = [System.Console]::ReadKey($true)
+            
+            if ($subKey.KeyChar -eq '1') {
+                try {
+                    $response = Invoke-RestMethod -Uri "http://127.0.0.1:8080/start" -Method Get -ErrorAction Stop
+                    Write-Host " -> MACRO IS NOW ACTIVE" -ForegroundColor Green
+                } catch {
+                    Write-Host " -> ERROR: Make sure RhythiaWebControl.exe is running!" -ForegroundColor Yellow
+                }
+            }
+            elseif ($subKey.KeyChar -eq '2') {
+                try {
+                    $response = Invoke-RestMethod -Uri "http://127.0.0.1:8080/stop" -Method Get -ErrorAction Stop
+                    Write-Host " -> MACRO PAUSED" -ForegroundColor Red
+                } catch {
+                    Write-Host " -> ERROR: Make sure RhythiaWebControl.exe is running!" -ForegroundColor Yellow
+                }
+            }
+            elseif ($subKey.Key -eq 'Escape') {
+                # Go back to the fake exit screen
+                Clear-Host
+                Write-Host "Press ENTER to exit..."
+                break
+            }
         }
-        function updateStatus() {
-            fetch(API + '/status')
-                .then(r => r.text())
-                .then(t => {
-                    let el = document.getElementById('stat');
-                    el.innerText = 'Status: ' + t;
-                    el.style.color = t.includes('Active') ? '#3fb950' : '#ff7b72';
-                })
-                .catch(e => {
-                    let el = document.getElementById('stat');
-                    el.innerText = 'Status: Disconnected (Is the background .exe running?)';
-                    el.style.color = '#ff7b72';
-                });
-        }
-        setInterval(updateStatus, 1000);
-    </script>
-</head>
-<body onload="updateStatus()">
-    <h1>Rhythia Aimbot Panel</h1>
-    <div class="status" id="stat">Status: Loading...</div>
-    <button id="startBtn" onclick="sendCmd('/start')">▶ START MACRO</button>
-    <button id="stopBtn" onclick="sendCmd('/stop')">⏸ STOP MACRO</button>
-    <br>
-    <button id="exitBtn" onclick="sendCmd('/exit')">✖ CLOSE APP COMPLETELY</button>
-</body>
-</html>
+    }
+}
