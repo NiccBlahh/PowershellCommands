@@ -1,128 +1,45 @@
-[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001|Out-Null; Clear-Host
-
-# Auto-Elevate & Audit
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(544)) {
-    if ($PSCommandPath) { Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs; exit }
-    Write-Host "[-] Please run as Administrator." -F Red; return
-}
-auditpol /set /subcategory:"Process Creation" /success:enable | Out-Null
-
-# Banner
-Write-Host @"
-    ___    __  __           
-   /   |  / /_/ /___ ______ 
-  / /| | / __/ / __ `/ ___/ 
- / ___ |/ /_/ / /_/ (__  )  
-/_/  |_|\__/_/\__,_/____/   
-"@ -ForegroundColor Cyan
-
-Write-Host "  Made by Nicc | Hit up imnicc.dll for any errors`n" -ForegroundColor DarkGray
-
-$cutoff = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
-Write-Host "  [i] System Last Boot: $($cutoff.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Yellow
-
-$suspExt = '\.(scr|bat|vbs|vbe|js|jse|hta|ps1|cmd|wsf)$'
-$suspPath = '\\AppData\\Local\\Temp\\|\\Temp\\|\\Downloads\\|\\AppData\\Roaming\\(?!Microsoft\\)'
-$results = [System.Collections.Generic.List[object]]::new()
-
-# Prefetch Collection
-try {
-    Get-ChildItem "$env:WINDIR\Prefetch\*.pf" -File -ErrorAction Stop | Where-Object LastWriteTime -ge $cutoff | ForEach-Object {
-        $exeName = if ($_.BaseName -match '^(.+)-[0-9A-Fa-f]{8}$') { $matches[1] } else { $_.BaseName }
-        $results.Add([PSCustomObject]@{ TS=$_.LastWriteTime; Type="Executed"; Name=$exeName; SourcePath=""; Detail="Prefetch"; Susp=($exeName -match $suspExt) })
-    }
-} catch { }
-
-# Admin Executions Collection
-try {
-    $msDiff = [math]::Floor(((Get-Date) - $cutoff).TotalMilliseconds)
-    if ($msDiff -gt 0) {
-        $xml = "<QueryList><Query Id='0' Path='Security'><Select Path='Security'>*[System[(EventID=4688) and TimeCreated[timediff(@SystemTime)&lt;$msDiff]]] and *[EventData[Data[@Name='TokenElevationType'] and (Data='%%1937')]]</Select></Query></QueryList>"
-        Get-WinEvent -FilterXml $xml -MaxEvents 200 -ErrorAction Stop | ForEach-Object {
-            $x = [xml]$_.ToXml()
-            $path = ($x.Event.EventData.Data | Where-Object { $_.Name -eq 'NewProcessName' }).'#text'
-            $results.Add([PSCustomObject]@{ TS=$_.TimeCreated; Type="Admin Exec"; Name=[System.IO.Path]::GetFileName($path); SourcePath=$path; Detail="Path: $path"; Susp=($path -match $suspPath -or $path -match $suspExt) })
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Rhythia Web UI</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #0d1117; color: white; text-align: center; margin-top: 100px; }
+        h1 { color: #58a6ff; }
+        button { font-size: 24px; font-weight: bold; padding: 15px 40px; margin: 15px; cursor: pointer; border-radius: 8px; border: none; transition: 0.2s; }
+        button:hover { transform: scale(1.05); }
+        #startBtn { background: #238636; color: white; }
+        #stopBtn { background: #da3633; color: white; }
+        #exitBtn { background: #30363d; color: white; margin-top: 50px; font-size: 18px; }
+        .status { font-size: 24px; margin: 30px; font-weight: bold; color: #ff7b72; }
+    </style>
+    <script>
+        const API = 'http://127.0.0.1:8080';
+        function sendCmd(cmd) {
+            fetch(API + cmd).then(() => updateStatus()).catch(e => console.log("Make sure the .exe is running!"));
         }
-    }
-} catch { }
-
-# Sort, remove duplicates, take top 60
-$results = $results | Sort-Object TS -Descending | Group-Object Name | ForEach-Object { $_.Group[0] } | Select-Object -First 60
-
-if (!$results) { Write-Host "`n  No activity found." -F DarkGray; exit }
-
-Write-Host "`n  === LAST 60 UNIQUE EXECUTABLES ===" -ForegroundColor Cyan
-foreach ($i in $results) {
-    # Attempt to resolve missing paths for Prefetch items
-    if (-not $i.SourcePath -or -not (Test-Path -LiteralPath $i.SourcePath)) {
-        $proc = Get-Process -Name ($i.Name -replace '\.exe$','') -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($proc -and $proc.Path) { 
-            $i.SourcePath = $proc.Path 
-        } else {
-            $found = Get-ChildItem -Path "$env:USERPROFILE\Desktop", "$env:USERPROFILE\Downloads" -Filter $i.Name -Recurse -Depth 2 -File -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) { $i.SourcePath = $found.FullName }
+        function updateStatus() {
+            fetch(API + '/status')
+                .then(r => r.text())
+                .then(t => {
+                    let el = document.getElementById('stat');
+                    el.innerText = 'Status: ' + t;
+                    el.style.color = t.includes('Active') ? '#3fb950' : '#ff7b72';
+                })
+                .catch(e => {
+                    let el = document.getElementById('stat');
+                    el.innerText = 'Status: Disconnected (Is the background .exe running?)';
+                    el.style.color = '#ff7b72';
+                });
         }
-    }
-
-    # ADVANCED Heuristic File Scanner
-    $scanDetections = @()
-    if ($i.SourcePath -and (Test-Path -LiteralPath $i.SourcePath)) {
-        $fileSize = (Get-Item -LiteralPath $i.SourcePath).Length
-        if ($fileSize -lt 20MB) {
-            try {
-                $bytes = [System.IO.File]::ReadAllBytes($i.SourcePath)
-                $text = [System.Text.Encoding]::ASCII.GetString($bytes) -replace "`0", ""
-                
-                # Generic A: Basic Mouse Events
-                if ($text -match 'mouse_event|SendInput|GetAsyncKeyState|SetCursorPos') { 
-                    $scanDetections += "Generic A (Basic Mouse Events)" 
-                }
-                # Generic C/D: Advanced Hooks & Driver Clickers
-                if ($text -match 'interception\.dll|mouse\.sys|SetWindowsHookEx|CallNextHookEx') { 
-                    $scanDetections += "Generic C (Advanced Hooks/Driver Level)" 
-                }
-                # Generic G: Injectors & Ghost Clients
-                if ($text -match 'VirtualAllocEx|WriteProcessMemory|CreateRemoteThread|ReadProcessMemory|JNI_CreateJavaVM|AttachCurrentThread') { 
-                    $scanDetections += "Generic G (Injector/Ghost Client)" 
-                }
-                # Generic F: Obfuscators & Packers
-                if ($text -match 'UPX0|\.vmp|Themida|Costura|ConfuserEx|SmartAssembly|\.NET Reactor|Dotfuscator') { 
-                    $scanDetections += "Generic F (Packed/Obfuscated)" 
-                }
-                # Specific A: Known C# / PowerShell Clickers (Shadow Clicker, Tonynoh, etc.)
-                if ($text -match 'ShadowClicker|MeowTonynoh|Tonynoh|leftCps|rightCps|leftVK|rightVK') {
-                    $scanDetections += "Specific A (Known PS/C# Autoclicker Strings)"
-                }
-                
-            } catch { $scanDetections += "Read Error" }
-        } else {
-            $scanDetections += "File too large (>20MB)"
-        }
-    }
-
-    # Set purple (Magenta) color if cheat is detected
-    $isCheat = ($scanDetections.Count -gt 0 -and $scanDetections -notcontains "File too large (>20MB)" -and $scanDetections -notcontains "Read Error")
-    $color = if ($isCheat) { "Magenta" } elseif ($i.Susp) { "Red" } elseif ($i.Type -eq "Admin Exec") { "DarkCyan" } else { "Green" }
-
-    Write-Host "  $($i.TS.ToString('yyyy-MM-dd HH:mm:ss'))  " -ForegroundColor DarkGray -NoNewline
-    Write-Host "[$($i.Type)]  " -ForegroundColor $color -NoNewline
-    Write-Host "$($i.Name)" -ForegroundColor White -NoNewline
-    if ($i.Susp) { Write-Host "  [!] Flagged Path" -ForegroundColor Red -NoNewline }
-    
-    if ($scanDetections.Count -gt 0) {
-        $detColor = if ($isCheat) { "Magenta" } else { "Yellow" }
-        Write-Host "  >> DETECTED: $($scanDetections -join ', ')" -ForegroundColor $detColor
-    } else {
-        Write-Host ""
-    }
-
-    Write-Host "      $($i.Detail)" -ForegroundColor DarkGray
-    if ($i.SourcePath -and $i.Detail -eq "Prefetch") {
-        Write-Host "      Resolved Path: $($i.SourcePath)" -ForegroundColor DarkGray
-    }
-}
-
-Write-Host ""
-if ((Read-Host "  Export CSV? (y/n)") -match '^y') {
-    $results | Export-Csv -Path "$env:USERPROFILE\Desktop\AtlasTimeline_$((Get-Date).ToString('yyyyMMdd_HHmmss')).csv" -NoTypeInformation -Encoding UTF8
-}
+        setInterval(updateStatus, 1000);
+    </script>
+</head>
+<body onload="updateStatus()">
+    <h1>Rhythia Aimbot Panel</h1>
+    <div class="status" id="stat">Status: Loading...</div>
+    <button id="startBtn" onclick="sendCmd('/start')">▶ START MACRO</button>
+    <button id="stopBtn" onclick="sendCmd('/stop')">⏸ STOP MACRO</button>
+    <br>
+    <button id="exitBtn" onclick="sendCmd('/exit')">✖ CLOSE APP COMPLETELY</button>
+</body>
+</html>
